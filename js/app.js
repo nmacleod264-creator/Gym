@@ -1,6 +1,7 @@
 import {
   EXERCISES, SLOTS, TYPE_DEFAULTS, SESSIONS, SPLITS, BLOCK, WARMUP, RECOVERY, MEALS, TIPS, GUIDE,
 } from './data.js';
+import { getApiKey, setApiKey, resizeImage, analyzeMeal } from './food-ai.js';
 
 /* ---------- storage ---------- */
 
@@ -87,6 +88,8 @@ let modal = null;
 let timer = null;
 let curKey = todayKey();
 const openInfo = new Set();
+const freshSnap = () => ({ image: null, desc: '', busy: false, result: null, error: '' });
+let snap = freshSnap();
 let audioCtx = null;
 
 function day(k) {
@@ -325,6 +328,8 @@ const I = {
   check: '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
   chevron: '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
+  camera: '<svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
+  spark: '<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>',
 };
 
 /* ---------- rendering ---------- */
@@ -623,6 +628,7 @@ function viewFood() {
       ${bar(f.p, t.protein, 'Protein (g)')}
       <p class="muted small">Maintenance is about ${t.tdee} kcal. Your target adds a ${state.settings.surplus + (state.calAdjust || 0)} kcal surplus for slow, lean weight gain.</p>
     </section>
+    ${snapCard()}
     <section class="card">
       <h3>Today's meal plan</h3>
       <p class="muted small">Tick meals as you eat them. Swap anything you don't fancy. Values are estimates.</p>
@@ -642,7 +648,8 @@ function viewFood() {
       }).join('')}</ul>
     </section>
     <section class="card">
-      <h3>Ate something else?</h3>
+      <h3>Quick add</h3>
+      <p class="muted small">Already know the numbers? Type them in.</p>
       <form class="quick-add" data-form="food">
         <input name="name" placeholder="What was it?" maxlength="60" autocomplete="off">
         <input name="kcal" type="number" inputmode="numeric" placeholder="kcal" min="0" max="5000">
@@ -651,7 +658,7 @@ function viewFood() {
       </form>
       <ul class="checklist">${(d.extra || []).map((x, i) => `
         <li class="check-item done">
-          <div class="ci-body"><div class="ci-label">${esc(x.name || 'Food')}</div><div class="ci-sub">${x.kcal || 0} kcal · ${x.p || 0} g protein</div></div>
+          <div class="ci-body"><div class="ci-label">${x.ai ? I.spark : ''}${esc(x.name || 'Food')}</div><div class="ci-sub">${x.kcal || 0} kcal · ${x.p || 0} g protein${x.detail ? `<br>${esc(x.detail)}` : ''}</div></div>
           <button class="icon-btn subtle" data-act="del-food" data-i="${i}" aria-label="Delete">${I.x}</button>
         </li>`).join('')}</ul>
     </section>
@@ -659,6 +666,69 @@ function viewFood() {
       <div class="eyebrow">Struggling to eat enough?</div>
       <p>Drink calories (milk, shakes), add olive oil or peanut butter to meals, and eat every 3-4 hours. A mass shake is an easy 800 kcal.</p>
     </section>`;
+}
+
+/* ----- AI meal snap ----- */
+
+function snapTotals(r) {
+  return r.items.reduce((a, i) => ({ kcal: a.kcal + i.kcal, p: a.p + i.protein_g }), { kcal: 0, p: 0 });
+}
+
+function snapCard() {
+  if (!getApiKey()) {
+    return `
+    <section class="card snap">
+      <div class="eyebrow">Optional</div>
+      <h3>Snap a meal, get the numbers</h3>
+      <p class="muted small">Take a photo and/or describe what you ate, and Claude estimates the calories and protein item by item. It needs your own Anthropic API key, which costs a few cents per meal.</p>
+      <button class="btn ghost block" data-act="ai-setup">${I.spark} Set it up</button>
+    </section>`;
+  }
+  const r = snap.result;
+  return `
+    <section class="card snap">
+      <h3>Snap a meal</h3>
+      <label class="photo-pick ${snap.image ? 'has' : ''}">
+        ${snap.image ? `<img src="${snap.image}" alt="Your meal">` : `${I.camera}<span>Take or choose a photo</span>`}
+        <input type="file" accept="image/*" data-input="snap-photo" hidden>
+      </label>
+      ${snap.image ? `<button class="link-btn" data-act="snap-clear-photo">${I.x} Remove photo</button>` : ''}
+      <textarea data-input="snap-desc" rows="2" placeholder="Describe it. Weights help a lot, e.g. 80 g oats (dry), 250 ml whole milk, 1 banana">${esc(snap.desc)}</textarea>
+      <button class="btn primary block" data-act="snap-analyze" ${snap.busy ? 'disabled' : ''}>${snap.busy ? '<span class="spinner"></span> Analysing…' : `${I.spark} ${r ? 'Analyse again' : 'Analyse'}`}</button>
+      ${snap.error ? `<p class="error">${esc(snap.error)}</p>` : ''}
+      ${r && !snap.busy ? snapResult(r) : ''}
+    </section>`;
+}
+
+function snapResult(r) {
+  if (!r.is_food || !r.items.length) {
+    return `<div class="ai-result"><p>That doesn't look like food or drink. Try another photo or describe what you ate.</p></div>`;
+  }
+  const tot = snapTotals(r);
+  const conf = { high: 'High confidence', medium: 'Medium confidence', low: 'Rough guess' }[r.confidence] || '';
+  return `
+    <div class="ai-result">
+      <div class="ai-head">
+        <div><div class="eyebrow">Estimate</div><h3>${esc(r.title)}</h3></div>
+        <span class="chip conf-${esc(r.confidence)}">${conf}</span>
+      </div>
+      <div class="ai-total"><b>${tot.kcal}</b> kcal · <b>${tot.p}</b> g protein</div>
+      <div class="muted small">Likely range ${r.kcal_low}-${r.kcal_high} kcal</div>
+      ${r.question ? `<div class="ai-question">${I.info}<span>${esc(r.question)} <em>Add the answer to the description and tap Analyse again.</em></span></div>` : ''}
+      <ul class="ai-items">${r.items.map((it, i) => `
+        <li>
+          <div class="ai-name"><b>${esc(it.name)}</b><span>${esc(it.amount)}</span></div>
+          <label><input type="number" inputmode="numeric" min="0" value="${it.kcal}" data-input="ai-kcal" data-i="${i}" aria-label="${esc(it.name)} calories"><span>kcal</span></label>
+          <label><input type="number" inputmode="numeric" min="0" value="${it.protein_g}" data-input="ai-p" data-i="${i}" aria-label="${esc(it.name)} protein"><span>g prot</span></label>
+        </li>`).join('')}
+      </ul>
+      ${r.assumptions.length ? `<div class="ai-assume"><div class="eyebrow">Assumed</div><ul>${r.assumptions.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>` : ''}
+      <p class="muted small">Numbers look off? Edit them above, or fix the description and analyse again.</p>
+      <div class="row">
+        <button class="btn ghost" data-act="snap-clear">Discard</button>
+        <button class="btn primary" data-act="snap-add">${I.plus} Add to today</button>
+      </div>
+    </div>`;
 }
 
 /* ----- progress ----- */
@@ -862,6 +932,12 @@ function settingsForm(welcome) {
         <ul class="habit-edit">${state.habits.map(h => `<li><span>${esc(h.label)}</span><button type="button" class="icon-btn subtle" data-act="del-habit" data-id="${h.id}" aria-label="Remove">${I.x}</button></li>`).join('')}</ul>
         <div class="add-row"><input id="new-habit" placeholder="e.g. Read 10 pages" maxlength="60"><button type="button" class="icon-btn solid" data-act="add-habit" aria-label="Add habit">${I.plus}</button></div>
       </fieldset>
+      <fieldset>
+        <legend>Meal photos (AI)</legend>
+        <p class="muted small">Claude estimates calories and protein from a photo or description. Create an API key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> and add a little credit. Each meal costs a few cents. The key is stored only on this phone and isn't included in backups.</p>
+        <input id="ai-key" name="apiKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${getApiKey() ? 'Key saved. Paste a new one to replace it' : 'Paste your key (sk-ant-…)'}">
+        ${getApiKey() ? `<button type="button" class="link-btn danger" data-act="remove-key">Remove saved key</button>` : ''}
+      </fieldset>
       <label class="switch"><input type="checkbox" name="restTimer" ${s.restTimer ? 'checked' : ''}> Rest timer after each set</label>`}
       <button class="btn primary block big" type="submit">${welcome ? "Let's go" : 'Save'}</button>
     </form>
@@ -883,6 +959,10 @@ function settingsForm(welcome) {
 /* ---------- after render: chart hover etc. ---------- */
 
 function afterRender() {
+  if (modal?.focus === 'ai') {
+    modal.focus = null;
+    document.getElementById('ai-key')?.scrollIntoView({ block: 'center' });
+  }
   const svg = document.querySelector('.chart');
   if (!svg || !chartPts.length) return;
   const tip = document.getElementById('chart-tip');
@@ -1062,6 +1142,28 @@ const ACTIONS = {
     save(); render();
   },
   'del-food'(el) { day(curKey).extra.splice(+el.dataset.i, 1); save(); render(); },
+  'ai-setup'() { modal = { type: 'settings', focus: 'ai' }; render(); },
+  'remove-key'() { setApiKey(''); render(); toast('API key removed'); },
+  'snap-clear-photo'() { snap.image = null; render(); },
+  'snap-clear'() { snap = freshSnap(); render(); },
+  async 'snap-analyze'() {
+    if (snap.busy) return;
+    if (!snap.image && !snap.desc.trim()) { toast('Add a photo or describe what you ate'); return; }
+    snap.busy = true; snap.error = ''; render();
+    try {
+      snap.result = await analyzeMeal({ apiKey: getApiKey(), image: snap.image, description: snap.desc });
+    } catch (e) {
+      snap.error = e.message;
+    }
+    snap.busy = false; render();
+  },
+  'snap-add'() {
+    const r = snap.result;
+    const tot = snapTotals(r);
+    day(curKey).extra.push({ name: r.title, kcal: tot.kcal, p: tot.p, detail: r.items.map(i => `${i.name} ${i.amount}`).join(', '), ai: true });
+    snap = freshSnap(); save(); render();
+    toast(`Added ${tot.kcal} kcal, ${tot.p} g protein`);
+  },
   'cal-adjust'(el) { state.calAdjust = (state.calAdjust || 0) + Number(el.dataset.amt); save(); render(); toast(`Calorie target is now ${targets().kcal} kcal`); },
 
   'add-habit'() {
@@ -1122,6 +1224,8 @@ const FORMS = {
     }
     s.trainingDays = f.getAll('td').map(Number).sort();
     if (form.restTimer) s.restTimer = form.restTimer.checked;
+    const key = String(f.get('apiKey') || '').trim();
+    if (key) setApiKey(key);
     const firstRun = !s.onboarded;
     s.onboarded = true;
     // If the schedule changed and today's session hasn't been started, rebuild it.
@@ -1138,6 +1242,7 @@ const INPUTS = {
   w(el) { curWorkout().exercises[+el.dataset.i].sets[+el.dataset.j].w = el.value.trim(); save(); },
   r(el) { curWorkout().exercises[+el.dataset.i].sets[+el.dataset.j].r = el.value.trim(); save(); },
   notes(el) { curWorkout().notes = el.value; save(); },
+  'snap-desc'(el) { snap.desc = el.value; },
 };
 
 const CHANGES = {
@@ -1146,6 +1251,15 @@ const CHANGES = {
     day(curKey).weight = v != null && v > 20 && v < 300 ? Math.round(v * 10) / 10 : null;
     save(); render();
   },
+  'snap-photo'(el) {
+    const file = el.files[0];
+    if (!file) return;
+    resizeImage(file)
+      .then(img => { snap.image = img; snap.result = null; snap.error = ''; render(); })
+      .catch(e => toast(e.message));
+  },
+  'ai-kcal'(el) { snap.result.items[+el.dataset.i].kcal = Math.max(0, Math.round(num(el.value) || 0)); render(); },
+  'ai-p'(el) { snap.result.items[+el.dataset.i].protein_g = Math.max(0, Math.round(num(el.value) || 0)); render(); },
   'add-ex'(el) {
     const id = el.value;
     if (!id) return;

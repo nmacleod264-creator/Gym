@@ -5,6 +5,7 @@ A phone app (installable web app) that gives you a fresh plan every day to go fr
 - **Today**: a daily checklist (workout, protein, calories, water, weigh-in, your own habits) plus a to-do list. Unfinished to-dos roll over to the next day.
 - **Workout**: a new session every day, built from a research-based lean-bulk program. You can log weight and reps (optional), see what you did last time, get "add weight" suggestions, and there's a rest timer.
 - **Food**: daily calorie and protein targets, a meal plan that changes every day, and a quick-add for anything else.
+- **Snap a meal** (optional): take a photo and/or describe what you ate, and Claude estimates calories and protein item by item. It shows its assumptions (e.g. "80 g oats taken as dry weight"), a likely range and a confidence level, asks a follow-up question when one detail would change the answer a lot, and lets you edit the numbers before adding them.
 - **Progress**: bodyweight chart with an ETA to your goal, a pace check that suggests calorie changes, streaks, best lifts and workout history.
 
 Everything is stored on your phone. There's no account and no server. Use **Settings → Export backup** now and then.
@@ -26,6 +27,13 @@ Everything is stored on your phone. There's no account and no server. Use **Sett
 - Food targets: Mifflin-St Jeor maintenance + ~350 kcal surplus, ~2 g protein per kg. The aim is to gain ~0.25-0.5 kg/week.
 
 The full reasoning is in the app (book icon, top right). Exercises, meals and tips are all plain data in `js/data.js`, so they're easy to edit.
+
+## Meal photos (optional)
+
+1. Create an API key at https://console.anthropic.com/settings/keys and add some credit. Setting a monthly spend limit there is a good idea.
+2. In the app: **Settings → Meal photos (AI)** → paste the key → Save.
+
+Each analysis is one request to Claude (`claude-opus-5-5`) sent straight from your phone. It costs a few cents. The key is stored only on your phone and is not included in backups. Estimates are best when you include weights, and say whether grains were weighed dry or cooked. Portions judged from a photo alone can be off by 20-30%.
 
 ## Putting it on your phone
 

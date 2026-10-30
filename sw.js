@@ -1,11 +1,13 @@
 // Offline support. Bump VERSION whenever you change any app file.
-const VERSION = 'dailygym-v1';
+const VERSION = 'dailygym-v2';
 const FILES = [
   './',
   './index.html',
   './styles.css',
   './js/app.js',
   './js/data.js',
+  './js/food-ai.js',
+  './js/vendor/anthropic-sdk.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
