@@ -693,7 +693,7 @@ function snapCard() {
         <input type="file" accept="image/*" data-input="snap-photo" hidden>
       </label>
       ${snap.image ? `<button class="link-btn" data-act="snap-clear-photo">${I.x} Remove photo</button>` : ''}
-      <textarea data-input="snap-desc" rows="2" placeholder="Describe it. Weights help a lot, e.g. 80 g oats (dry), 250 ml whole milk, 1 banana">${esc(snap.desc)}</textarea>
+      <textarea data-input="snap-desc" rows="2" placeholder="Describe it, or photograph it on your scale. Weights help a lot, e.g. 80 g oats (dry), 250 ml whole milk, 1 banana">${esc(snap.desc)}</textarea>
       <button class="btn primary block" data-act="snap-analyze" ${snap.busy ? 'disabled' : ''}>${snap.busy ? '<span class="spinner"></span> Analysing…' : `${I.spark} ${r ? 'Analyse again' : 'Analyse'}`}</button>
       ${snap.error ? `<p class="error">${esc(snap.error)}</p>` : ''}
       ${r && !snap.busy ? snapResult(r) : ''}
