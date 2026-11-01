@@ -1,5 +1,5 @@
 // Offline support. Bump VERSION whenever you change any app file.
-const VERSION = 'dailygym-v3';
+const VERSION = 'dailygym-v4';
 const FILES = [
   './',
   './index.html',

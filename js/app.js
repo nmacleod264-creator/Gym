@@ -1,5 +1,5 @@
 import {
-  EXERCISES, SLOTS, TYPE_DEFAULTS, SESSIONS, SPLITS, BLOCK, WARMUP, RECOVERY, MEALS, TIPS, GUIDE,
+  EXERCISES, SLOTS, TYPE_DEFAULTS, GROUPS, SLOT_GROUP, DAY_TYPES, LENGTHS, BLOCK, WARMUP, RECOVERY, MEALS, TIPS, GUIDE,
 } from './data.js';
 import { getApiKey, setApiKey, resizeImage, analyzeMeal } from './food-ai.js';
 
@@ -20,7 +20,8 @@ function defaultState() {
       activity: 1.55,
       surplus: 350,
       waterTarget: 3,
-      trainingDays: [1, 2, 4, 5], // Mon Tue Thu Fri
+      weeklyGoal: 5,
+      sessionLength: 45,
       restTimer: true,
       startDate: todayKey(),
     },
@@ -100,38 +101,28 @@ function sortedKeys() { return Object.keys(state.days).sort(); }
 
 /* ---------- program logic ---------- */
 
-function splitSize() { return Math.max(2, Math.min(6, state.settings.trainingDays.length)); }
-
 function blockInfo(k) {
   const d = Math.max(0, daysBetween(state.settings.startDate, k));
   const week = Math.floor((d % 42) / 7) + 1;
   return { number: Math.floor(d / 42) + 1, ...BLOCK[week - 1] };
 }
 
-function nextSessionIndex(k) {
-  const n = splitSize();
+function previousSessionIds(type, k) {
   const keys = sortedKeys().filter(x => x < k).reverse();
   for (const x of keys) {
     const w = state.days[x].workout;
-    if (w && w.kind === 'lift' && w.finished && w.split === n) return (w.idx + 1) % SPLITS[n].length;
-  }
-  return 0;
-}
-
-function previousSessionIds(session, k) {
-  const keys = sortedKeys().filter(x => x < k).reverse();
-  for (const x of keys) {
-    const w = state.days[x].workout;
-    if (w && w.session === session) return w.exercises.map(e => e.id);
+    if (w && w.type === type) return w.exercises.map(e => e.id);
   }
   return [];
 }
 
 function makeExercise(id, slot, baseSets, anchor, blk) {
   const ex = EXERCISES[id];
-  let sets = baseSets;
-  if ((blk.week === 4 || blk.week === 5) && ex.type === 'isolation') sets += 1;
-  if (blk.week === 6) sets = Math.max(1, Math.ceil(baseSets / 2));
+  const len = state.settings.sessionLength;
+  let sets = len === 30 && !anchor ? Math.min(baseSets, 2) : baseSets;
+  // Hard weeks add an isolation set, but only when there's time for it.
+  if ((blk.week === 4 || blk.week === 5) && ex.type === 'isolation' && len >= 60) sets += 1;
+  if (blk.week === 6) sets = Math.max(1, Math.ceil(sets / 2));
   const def = TYPE_DEFAULTS[ex.type];
   return {
     id, slot, baseSets, anchor: !!anchor,
@@ -141,16 +132,14 @@ function makeExercise(id, slot, baseSets, anchor, blk) {
   };
 }
 
-function buildSession(k, salt = '') {
-  const n = splitSize();
-  const idx = nextSessionIndex(k);
-  const session = SPLITS[n][idx];
-  const tpl = SESSIONS[session];
+function buildSession(k, type, salt = '') {
+  const tpl = DAY_TYPES[type];
   const blk = blockInfo(k);
-  const r = rng(k + session + salt);
-  const last = new Set(previousSessionIds(session, k));
+  const r = rng(k + type + salt);
+  const last = new Set(previousSessionIds(type, k));
   const used = new Set();
-  const exercises = tpl.slots.map(([slot, sets, anchor]) => {
+  const count = LENGTHS[state.settings.sessionLength] || LENGTHS[45];
+  const exercises = tpl.slots.slice(0, count).map(([slot, sets, anchor]) => {
     const pool = SLOTS[slot].filter(id => !used.has(id));
     let id;
     if (anchor) {
@@ -164,14 +153,77 @@ function buildSession(k, salt = '') {
     return makeExercise(id, slot, sets, anchor, blk);
   });
   return {
-    kind: 'lift', session, split: n, idx, title: tpl.title, focus: tpl.focus,
+    kind: 'lift', type, picked: true, title: tpl.title, focus: tpl.focus,
     block: blk.number, week: blk.week, rir: blk.rir, exercises, notes: '', started: null, finished: null,
   };
 }
 
 function buildRest() {
-  return { kind: 'rest', title: 'Recovery Day', focus: 'Walk, mobility and core', done: {}, finished: null };
+  return { kind: 'rest', picked: true, title: 'Recovery Day', focus: 'Walk, mobility and core', done: {}, finished: null };
 }
+
+function setCounts(w) {
+  let done = 0, total = 0;
+  for (const e of w.exercises) for (const s of e.sets) { total++; if (s.done) done++; }
+  return { done, total };
+}
+
+// Counts as trained as soon as any set is ticked, whether or not Finish was tapped.
+function trained(w) { return !!w && w.kind === 'lift' && (!!w.finished || setCounts(w).done > 0); }
+function workoutDone(w) {
+  if (!w) return false;
+  if (w.kind === 'rest') return !!w.finished;
+  const c = setCounts(w);
+  return !!w.finished || (c.total > 0 && c.done / c.total >= 0.75);
+}
+function touched(w) {
+  if (!w) return false;
+  if (w.kind === 'rest') return !!w.finished || Object.values(w.done || {}).some(Boolean);
+  return trained(w);
+}
+
+function groupsWorked(w) {
+  const g = new Set();
+  for (const e of w.exercises) if (SLOT_GROUP[e.slot] && e.sets.some(s => s.done)) g.add(SLOT_GROUP[e.slot]);
+  if (!g.size && w.finished) for (const e of w.exercises) if (SLOT_GROUP[e.slot]) g.add(SLOT_GROUP[e.slot]);
+  return g;
+}
+
+function plannedGroups(type) {
+  const count = LENGTHS[state.settings.sessionLength] || LENGTHS[45];
+  return [...new Set(DAY_TYPES[type].slots.slice(0, count).map(([slot]) => SLOT_GROUP[slot]).filter(Boolean))];
+}
+
+// Days since each muscle group was last trained (0 = today, null = never in the last 60 days).
+function recovery() {
+  const out = Object.fromEntries(Object.keys(GROUPS).map(g => [g, null]));
+  const from = addDays(curKey, -60);
+  for (const k of sortedKeys().filter(x => x >= from && x <= curKey).reverse()) {
+    const w = state.days[k].workout;
+    if (!trained(w)) continue;
+    for (const g of groupsWorked(w)) if (out[g] == null) out[g] = daysBetween(k, curKey);
+  }
+  return out;
+}
+
+function lastDoneType(type) {
+  const k = sortedKeys().filter(x => x < curKey).reverse().find(x => state.days[x].workout?.type === type && trained(state.days[x].workout));
+  return k ? daysBetween(k, curKey) : null;
+}
+
+// Pick the workout whose muscles have rested longest. Suggest recovery if everything was hit in the last day.
+function suggestion(rec = recovery()) {
+  const order = ['push', 'pull', 'legs', 'upper', 'lower', 'arms', 'full'];
+  let best = null;
+  for (const t of order) {
+    const days = plannedGroups(t).map(g => rec[g] ?? 99);
+    const min = Math.min(...days), avg = days.reduce((a, b) => a + b, 0) / days.length;
+    if (!best || min > best.min || (min === best.min && avg > best.avg)) best = { type: t, min, avg };
+  }
+  return best.min <= 1 ? 'rest' : best.type;
+}
+
+function dayAgo(n) { return n == null ? 'Not yet' : n === 0 ? 'Today' : n === 1 ? 'Yesterday' : `${n} days ago`; }
 
 function lastPerformance(id, beforeKey) {
   const keys = sortedKeys().filter(x => x < beforeKey).reverse();
@@ -274,7 +326,8 @@ function checklist(k) {
   const f = foodTotals(d);
   const w = d.workout;
   const items = [];
-  if (w) items.push({ id: 'workout', label: w.kind === 'rest' ? 'Recovery: walk + mobility' : `Workout: ${w.title}`, sub: w.finished ? 'Done' : w.kind === 'rest' ? 'Easy day' : `${w.exercises.length} exercises`, done: !!w.finished, auto: true });
+  if (!w) items.push({ id: 'workout', label: 'Train or recover', sub: k === curKey ? 'Pick today\'s workout' : 'Nothing logged', done: false, auto: true });
+  else items.push({ id: 'workout', label: w.kind === 'rest' ? 'Recovery: walk + mobility' : `Workout: ${w.title}`, sub: workoutDone(w) ? 'Done' : w.kind === 'rest' ? 'Easy day' : `${setCounts(w).done}/${setCounts(w).total} sets`, done: workoutDone(w), auto: true });
   items.push({ id: 'protein', label: 'Hit your protein', sub: `${f.p} / ${t.protein} g`, done: f.p >= t.protein || !!d.habits.protein });
   items.push({ id: 'calories', label: 'Hit your calories', sub: `${f.kcal} / ${t.kcal} kcal`, done: f.kcal >= t.kcal - 100 || !!d.habits.calories });
   items.push({ id: 'water', label: 'Drink water', sub: `${+(d.water / 1000).toFixed(2)} / ${t.water} L`, done: d.water >= t.water * 1000, auto: true });
@@ -302,9 +355,9 @@ function prepareToday() {
     d.carried = true;
     changed = true;
   }
-  if (!d.workout) {
-    const wd = parseKey(k).getDay();
-    d.workout = state.settings.trainingDays.includes(wd) ? buildSession(k) : buildRest();
+  if (d.workout && !d.workout.picked && !touched(d.workout)) {
+    // Left over from the old automatic rotation: let you choose instead.
+    d.workout = null;
     changed = true;
   }
   if (!d.meals) { d.meals = buildMealPlan(k); changed = true; }
@@ -386,9 +439,6 @@ function viewToday() {
   const done = items.filter(i => i.done).length;
   const blk = blockInfo(curKey);
   const tip = TIPS[daysBetween('2024-01-01', curKey) % TIPS.length];
-  const setsDone = w.kind === 'lift' ? w.exercises.reduce((a, e) => a + e.sets.filter(s => s.done).length, 0) : 0;
-  const setsTotal = w.kind === 'lift' ? w.exercises.reduce((a, e) => a + e.sets.length, 0) : 0;
-  const btn = w.finished ? `${I.check} Done, nice work` : setsDone ? `${I.play} Continue (${setsDone}/${setsTotal} sets)` : `${I.play} ${w.kind === 'rest' ? 'Open recovery plan' : 'Start workout'}`;
 
   return `
     <section class="hero">
@@ -400,13 +450,7 @@ function viewToday() {
       ${ring(items.length ? done / items.length : 0, `<b>${done}</b>/${items.length}`)}
     </section>
 
-    <section class="card workout-card ${w.finished ? 'is-done' : ''}">
-      <div class="eyebrow">${w.kind === 'rest' ? 'Rest day' : "Today's training"}</div>
-      <h2>${esc(w.title)}</h2>
-      <p class="muted">${esc(w.focus)}</p>
-      ${w.kind === 'lift' ? `<div class="chips"><span class="chip">${w.exercises.length} exercises</span><span class="chip">${setsTotal} sets</span><span class="chip">~${Math.round(setsTotal * 2.6 + 8)} min</span><span class="chip">${w.rir} reps in reserve</span></div>` : ''}
-      <button class="btn ${w.finished ? 'ghost' : 'primary'} block" data-act="tab" data-tab="workout">${btn}</button>
-    </section>
+    ${todayWorkoutCard(w)}
 
     <section class="card">
       <h3>Daily checklist</h3>
@@ -429,6 +473,44 @@ function viewToday() {
     </section>
 
     <section class="card tip"><div class="eyebrow">Tip of the day</div><p>${esc(tip)}</p></section>`;
+}
+
+function todayWorkoutCard(w) {
+  if (!w) {
+    const sug = suggestion();
+    const title = sug === 'rest' ? 'Recovery day' : DAY_TYPES[sug].title;
+    return `
+    <section class="card workout-card">
+      <div class="eyebrow">Today's training</div>
+      <h2>What are you training?</h2>
+      <p class="muted">Suggested: <b>${title}</b>, ${sug === 'rest' ? 'since you trained everything recently' : 'the most rested muscles right now'}.</p>
+      <div class="row mt-s">
+        <button class="btn ghost" data-act="tab" data-tab="workout">Choose</button>
+        <button class="btn primary" data-act="pick" data-type="${sug}">${I.play} Start ${esc(title)}</button>
+      </div>
+    </section>`;
+  }
+  const done = workoutDone(w);
+  let btn;
+  if (w.kind === 'rest') btn = done ? `${I.check} Recovery done` : `${I.play} Open recovery plan`;
+  else {
+    const c = setCounts(w);
+    btn = done ? `${I.check} Done, nice work` : c.done ? `${I.play} Continue (${c.done}/${c.total} sets)` : `${I.play} Start workout`;
+  }
+  return `
+    <section class="card workout-card ${done ? 'is-done' : ''}">
+      <div class="eyebrow">${w.kind === 'rest' ? 'Rest day' : "Today's training"}</div>
+      <h2>${esc(w.title)}</h2>
+      <p class="muted">${esc(w.focus)}</p>
+      ${w.kind === 'lift' ? `<div class="chips"><span class="chip">${w.exercises.length} exercises</span><span class="chip">${setCounts(w).total} sets</span><span class="chip">~${estMinutes(w)} min</span></div>` : ''}
+      <button class="btn ${done ? 'ghost' : 'primary'} block" data-act="tab" data-tab="workout">${btn}</button>
+    </section>`;
+}
+
+function estMinutes(w) {
+  let sec = 6 * 60; // warm-up
+  for (const e of w.exercises) sec += e.sets.length * (45 + e.rest);
+  return Math.round(sec / 60 / 5) * 5;
 }
 
 function checkItem(i) {
@@ -458,7 +540,46 @@ function checkItem(i) {
 function viewWorkout() {
   const d = day(curKey);
   const w = d.workout;
+  if (!w) return viewPicker();
   return w.kind === 'rest' ? viewRest(w) : viewLift(w);
+}
+
+function viewPicker() {
+  const rec = recovery();
+  const sug = suggestion(rec);
+  const card = (type, title, focus, note, warn) => `
+    <button class="pick ${sug === type ? 'suggested' : ''}" data-act="pick" data-type="${type}">
+      ${sug === type ? '<span class="badge">Suggested</span>' : ''}
+      <b>${esc(title)}</b>
+      <span class="pick-focus">${esc(focus)}</span>
+      <span class="pick-note ${warn ? 'warn' : ''}">${esc(note)}</span>
+    </button>`;
+  const cards = Object.entries(DAY_TYPES).map(([type, t]) => {
+    const tired = plannedGroups(type).filter(g => rec[g] != null && rec[g] <= 1);
+    const last = lastDoneType(type);
+    const note = tired.length
+      ? `${tired.map(g => GROUPS[g]).join(' & ')} worked ${rec[tired[0]] === 0 ? 'today' : 'yesterday'}`
+      : last != null ? `Last done ${dayAgo(last).toLowerCase()}` : 'Not done yet';
+    return card(type, t.title, t.focus, note, tired.length > 0);
+  }).join('');
+  return `
+    <section class="card">
+      <div class="eyebrow">${fmtDate(curKey)}</div>
+      <h2>What are you training today?</h2>
+      <p class="muted">About ${state.settings.sessionLength} minutes each. Muscles need around 48 hours to recover, so the suggestion goes for what's rested longest.</p>
+    </section>
+    <section class="pick-grid">
+      ${cards}
+      ${card('rest', 'Recovery', 'Walk, mobility and core', 'Good after a few hard days', false)}
+    </section>
+    <section class="card">
+      <h3>Muscle recovery</h3>
+      <ul class="rows">${Object.entries(GROUPS).map(([g, name]) => {
+        const n = rec[g];
+        const ready = n == null || n >= 2;
+        return `<li><span>${name}</span><span class="muted">${dayAgo(n)}</span><span class="status ${ready ? 'ready' : 'rest'}"><i></i>${ready ? 'Ready' : 'Recovering'}</span></li>`;
+      }).join('')}</ul>
+    </section>`;
 }
 
 function viewRest(w) {
@@ -479,16 +600,13 @@ function viewRest(w) {
       </ul>
       ${w.finished ? `<p class="done-note">${I.check} Recovery done</p>` : `<button class="btn primary block" data-act="finish-rest">Mark recovery done</button>`}
     </section>
-    <section class="card">
-      <h3>Feel like training?</h3>
-      <p class="muted">You can pull your next session forward. The rotation stays in order.</p>
-      <button class="btn ghost block" data-act="train-anyway">${I.lift} Train today instead</button>
+    <section class="actions">
+      <button class="btn ghost block" data-act="switch">${I.lift} Train today instead</button>
     </section>`;
 }
 
 function viewLift(w) {
-  const setsDone = w.exercises.reduce((a, e) => a + e.sets.filter(s => s.done).length, 0);
-  const setsTotal = w.exercises.reduce((a, e) => a + e.sets.length, 0);
+  const { done: setsDone, total: setsTotal } = setCounts(w);
   const blk = BLOCK[w.week - 1];
   return `
     ${w.finished ? summaryCard(w) : ''}
@@ -498,6 +616,7 @@ function viewLift(w) {
       <p class="muted">${esc(w.focus)}</p>
       <div class="chips">
         <span class="chip">${setsDone}/${setsTotal} sets</span>
+        <span class="chip">~${estMinutes(w)} min</span>
         <span class="chip">${w.rir} reps in reserve</span>
         ${w.started && !w.finished ? `<span class="chip accent" id="elapsed"></span>` : ''}
       </div>
@@ -521,8 +640,8 @@ function viewLift(w) {
         ? `<button class="btn ghost block" data-act="reopen">Reopen workout</button>`
         : `<button class="btn primary block big" data-act="finish">${I.check} Finish workout</button>`}
       <div class="row">
-        <button class="btn ghost" data-act="shuffle">${I.swap} New variation</button>
-        <button class="btn ghost" data-act="make-rest">Make it a rest day</button>
+        <button class="btn ghost" data-act="shuffle">${I.swap} New exercises</button>
+        <button class="btn ghost" data-act="switch">Change workout</button>
       </div>
     </section>`;
 }
@@ -798,7 +917,7 @@ function heatGrid() {
     const s = state.days[k] ? score(k) : 0;
     const lvl = s === 0 ? 0 : s < 0.34 ? 1 : s < 0.67 ? 2 : s < 1 ? 3 : 4;
     const w = state.days[k]?.workout;
-    const lifted = w && w.kind === 'lift' && w.finished;
+    const lifted = trained(w);
     cells.push(`<div class="cell l${lvl} ${k === curKey ? 'today' : ''}" title="${fmtDate(k)}: ${Math.round(s * 100)}%${lifted ? ' · trained' : ''}">${lifted ? '<i></i>' : ''}</div>`);
   }
   return `
@@ -817,8 +936,8 @@ function viewProgress() {
   const best = bestLifts();
   const bestList = Object.entries(best).sort((a, b) => b[1].v - a[1].v).slice(0, 8);
   const mondayKey = addDays(curKey, -((parseKey(curKey).getDay() + 6) % 7));
-  const weekLifts = sortedKeys().filter(k => k >= mondayKey && k <= curKey && state.days[k].workout?.kind === 'lift' && state.days[k].workout.finished).length;
-  const history = sortedKeys().reverse().filter(k => state.days[k].workout?.kind === 'lift' && state.days[k].workout.finished);
+  const weekLifts = sortedKeys().filter(k => k >= mondayKey && k <= curKey && trained(state.days[k].workout)).length;
+  const history = sortedKeys().reverse().filter(k => trained(state.days[k].workout));
 
   let advice = '';
   if (rate != null) {
@@ -845,7 +964,7 @@ function viewProgress() {
     <section class="card">
       <div class="stats">
         <div><b>${streak()}</b><span>day streak</span></div>
-        <div><b>${weekLifts}/${s.trainingDays.length}</b><span>workouts this week</span></div>
+        <div><b>${weekLifts}/${s.weeklyGoal}</b><span>workouts this week</span></div>
         <div><b>${history.length}</b><span>total workouts</span></div>
       </div>
       <h3 class="mt">Last 5 weeks</h3>
@@ -898,8 +1017,6 @@ function renderModal() {
 
 function settingsForm(welcome) {
   const s = state.settings;
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const order = [1, 2, 3, 4, 5, 6, 0];
   return `
     ${welcome ? `<div class="eyebrow">Welcome</div><h2>Let's set up your plan</h2><p class="muted">A new workout every day, a daily checklist, and a meal plan to get you from ${fmtKg(s.startWeight)} to ${fmtKg(s.goalWeight)} kg. You can change all of this later.</p>` : '<h2>Settings</h2>'}
     <form data-form="settings" class="settings">
@@ -908,11 +1025,11 @@ function settingsForm(welcome) {
         <label>Current weight (kg)<input name="startWeight" type="number" step="0.1" inputmode="decimal" value="${s.startWeight}"></label>
         <label>Goal weight (kg)<input name="goalWeight" type="number" step="0.1" inputmode="decimal" value="${s.goalWeight}"></label>
       </div>
-      <fieldset>
-        <legend>Training days</legend>
-        <div class="day-chips">${order.map(i => `<label class="day-chip"><input type="checkbox" name="td" value="${i}" ${s.trainingDays.includes(i) ? 'checked' : ''}><span>${days[i]}</span></label>`).join('')}</div>
-        <p class="muted small">2-3 days: full body. 4: upper/lower. 5: upper/lower + push/pull/legs. 6: push/pull/legs twice. 4 is a great place to start.</p>
-      </fieldset>
+      <div class="grid2">
+        <label>Workouts per week<select name="weeklyGoal">${[3, 4, 5, 6].map(n => `<option value="${n}" ${s.weeklyGoal === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label>Session length<select name="sessionLength">${[30, 45, 60].map(n => `<option value="${n}" ${s.sessionLength === n ? 'selected' : ''}>${n} min</option>`).join('')}</select></label>
+      </div>
+      <p class="muted small">You pick what to train each day. The weekly number is just your target.</p>
       <details ${welcome ? '' : 'open'}>
         <summary>Body details (for calorie targets)</summary>
         <div class="grid2">
@@ -1109,21 +1226,25 @@ const ACTIONS = {
     save(); render(); window.scrollTo(0, 0);
   },
   reopen() { curWorkout().finished = null; save(); render(); },
+  pick(el) {
+    const type = el.dataset.type;
+    day(curKey).workout = type === 'rest' ? buildRest() : buildSession(curKey, type);
+    openInfo.clear(); save();
+    tab = 'workout'; render(); window.scrollTo(0, 0);
+  },
   shuffle() {
     const d = day(curKey);
-    const touched = d.workout.exercises.some(e => e.sets.some(s => s.done));
-    if (touched && !confirm('This replaces today\'s workout, including sets you\'ve logged. Continue?')) return;
+    if (!d.workout.type) { ACTIONS.switch(); return; }
+    if (touched(d.workout) && !confirm('This replaces today\'s exercises, including sets you\'ve logged. Continue?')) return;
     d.shuffle = (d.shuffle || 0) + 1;
-    d.workout = buildSession(curKey, `#${d.shuffle}`);
-    openInfo.clear(); save(); render(); toast('Fresh variation generated');
+    d.workout = buildSession(curKey, d.workout.type, `#${d.shuffle}`);
+    openInfo.clear(); save(); render(); toast('New exercises picked');
   },
-  'make-rest'() {
+  switch() {
     const d = day(curKey);
-    const touched = d.workout.exercises?.some(e => e.sets.some(s => s.done));
-    if (touched && !confirm('You have logged sets today. Replace with a rest day?')) return;
-    d.workout = buildRest(); timer = null; save(); render();
+    if (touched(d.workout) && !confirm('You have logged progress today. Pick a different workout anyway?')) return;
+    d.workout = null; timer = null; openInfo.clear(); save(); render(); window.scrollTo(0, 0);
   },
-  'train-anyway'() { const d = day(curKey); d.workout = buildSession(curKey); save(); render(); window.scrollTo(0, 0); },
   'rest-item'(el) {
     const w = curWorkout();
     w.done[el.dataset.id] = !w.done[el.dataset.id];
@@ -1210,7 +1331,6 @@ const FORMS = {
     const s = state.settings;
     const f = new FormData(form);
     const n = (k, min, max) => { const v = num(f.get(k)); return v != null && v >= min && v <= max ? v : s[k]; };
-    const oldDays = s.trainingDays.join();
     s.name = String(f.get('name') || '').trim();
     s.startWeight = n('startWeight', 30, 250);
     s.goalWeight = n('goalWeight', 30, 250);
@@ -1222,17 +1342,14 @@ const FORMS = {
       s.surplus = n('surplus', 0, 1000);
       s.waterTarget = n('waterTarget', 0.5, 8);
     }
-    s.trainingDays = f.getAll('td').map(Number).sort();
+    s.weeklyGoal = n('weeklyGoal', 1, 7);
+    s.sessionLength = LENGTHS[num(f.get('sessionLength'))] ? num(f.get('sessionLength')) : s.sessionLength;
     if (form.restTimer) s.restTimer = form.restTimer.checked;
     const key = String(f.get('apiKey') || '').trim();
     if (key) setApiKey(key);
     const firstRun = !s.onboarded;
     s.onboarded = true;
-    // If the schedule changed and today's session hasn't been started, rebuild it.
-    const d = day(curKey);
-    const untouched = d.workout && !d.workout.finished && !(d.workout.exercises || []).some(e => e.sets.some(x => x.done)) && !Object.values(d.workout.done || {}).some(Boolean);
-    if (untouched && (firstRun || oldDays !== s.trainingDays.join())) d.workout = null;
-    if (firstRun) d.meals = null;
+    if (firstRun) day(curKey).meals = null;
     save(); modal = null; render();
     toast(firstRun ? "All set. Here's today." : 'Saved');
   },

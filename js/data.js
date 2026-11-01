@@ -131,37 +131,41 @@ export const TYPE_DEFAULTS = {
   isolation: { reps: '10-15', rest: 75 },
 };
 
-// A slot entry: [slot, sets, anchor?]. The anchor is the session's main lift:
-// it stays the same for a whole 6-week block so you can see yourself get stronger.
-// Everything else rotates each session so no two days feel the same.
-export const SESSIONS = {
-  upperA: { title: 'Upper A', focus: 'Chest, back, shoulders, arms', slots: [['chestHeavy', 3, true], ['row', 3], ['press', 3], ['vertPull', 3], ['lateral', 3], ['biceps', 2], ['triceps', 2]] },
-  upperB: { title: 'Upper B', focus: 'Back-first upper day', slots: [['vertPull', 3, true], ['incline', 3], ['row', 3], ['chestIso', 2], ['lateral', 3], ['rearDelt', 2], ['triceps', 2], ['biceps', 2]] },
-  lowerA: { title: 'Lower A', focus: 'Quad-focused legs', slots: [['squat', 3, true], ['hingeLight', 3], ['singleLeg', 2], ['hamIso', 3], ['calves', 3], ['core', 2]] },
-  lowerB: { title: 'Lower B', focus: 'Hinge-focused legs', slots: [['hinge', 3, true], ['squatMachine', 3], ['quadIso', 3], ['hamIso', 3], ['glute', 2], ['calves', 3], ['core', 2]] },
-  push:   { title: 'Push', focus: 'Chest, shoulders, triceps', slots: [['chestHeavy', 3, true], ['press', 3], ['incline', 3], ['chestIso', 2], ['lateral', 3], ['triceps', 3]] },
-  pull:   { title: 'Pull', focus: 'Back, rear delts, biceps', slots: [['vertPull', 3, true], ['row', 3], ['row', 2], ['rearDelt', 3], ['shrug', 2], ['biceps', 3]] },
-  legs:   { title: 'Legs', focus: 'Quads, hamstrings, glutes, calves', slots: [['squat', 3, true], ['hinge', 3], ['singleLeg', 2], ['quadIso', 2], ['hamIso', 3], ['calves', 3]] },
-  fullA:  { title: 'Full Body A', focus: 'Squat + bench day', slots: [['squat', 3, true], ['chestHeavy', 3], ['row', 3], ['lateral', 3], ['hamIso', 2], ['biceps', 2]] },
-  fullB:  { title: 'Full Body B', focus: 'Hinge + press day', slots: [['hinge', 3, true], ['press', 3], ['vertPull', 3], ['quadIso', 2], ['triceps', 2], ['core', 2]] },
-  fullC:  { title: 'Full Body C', focus: 'Legs + upper chest day', slots: [['squatMachine', 3, true], ['incline', 3], ['row', 3], ['rearDelt', 2], ['calves', 3], ['biceps', 2]] },
+// Muscle groups used for recovery tracking and suggestions.
+export const GROUPS = { chest: 'Chest', back: 'Back', shoulders: 'Shoulders', arms: 'Arms', legs: 'Legs' };
+
+// Which muscle group each slot works (core counts toward none).
+export const SLOT_GROUP = {
+  chestHeavy: 'chest', incline: 'chest', chestIso: 'chest',
+  vertPull: 'back', row: 'back', shrug: 'back',
+  press: 'shoulders', lateral: 'shoulders', rearDelt: 'shoulders',
+  biceps: 'arms', triceps: 'arms',
+  squat: 'legs', squatMachine: 'legs', hinge: 'legs', hingeLight: 'legs', singleLeg: 'legs',
+  quadIso: 'legs', hamIso: 'legs', glute: 'legs', calves: 'legs',
 };
 
-// Which sessions rotate depending on how many days a week you train.
-export const SPLITS = {
-  2: ['fullA', 'fullB'],
-  3: ['fullA', 'fullB', 'fullC'],
-  4: ['upperA', 'lowerA', 'upperB', 'lowerB'],
-  5: ['upperA', 'lowerA', 'push', 'pull', 'legs'],
-  6: ['push', 'pull', 'legs', 'push', 'pull', 'legs'],
+// The workouts you can pick from. Slots are in priority order: a shorter session
+// takes the first few. A slot entry is [slot, sets, anchor?]. The anchor is the
+// main lift: it stays the same for a 6-week block so you can see yourself get stronger.
+export const DAY_TYPES = {
+  push:  { title: 'Push', focus: 'Chest, shoulders, triceps', slots: [['chestHeavy', 3, true], ['press', 3], ['incline', 3], ['lateral', 3], ['triceps', 3], ['chestIso', 2], ['triceps', 2]] },
+  pull:  { title: 'Pull', focus: 'Back, rear delts, biceps', slots: [['vertPull', 3, true], ['row', 3], ['row', 3], ['biceps', 3], ['rearDelt', 3], ['biceps', 2], ['shrug', 2]] },
+  legs:  { title: 'Legs', focus: 'Quads, hamstrings, glutes, calves', slots: [['squat', 3, true], ['hingeLight', 3], ['quadIso', 3], ['hamIso', 3], ['calves', 3], ['singleLeg', 2], ['core', 2]] },
+  upper: { title: 'Upper', focus: 'Chest, back and shoulders', slots: [['chestHeavy', 3, true], ['row', 3], ['press', 3], ['vertPull', 3], ['lateral', 3], ['biceps', 2], ['triceps', 2]] },
+  lower: { title: 'Lower', focus: 'Deadlift-style legs and glutes', slots: [['hinge', 3, true], ['squatMachine', 3], ['singleLeg', 3], ['hamIso', 3], ['calves', 3], ['glute', 2], ['core', 2]] },
+  arms:  { title: 'Arms & Shoulders', focus: 'Biceps, triceps, delts', slots: [['press', 3, true], ['biceps', 3], ['triceps', 3], ['lateral', 3], ['biceps', 3], ['triceps', 3], ['rearDelt', 2]] },
+  full:  { title: 'Full Body', focus: 'A bit of everything', slots: [['squat', 3, true], ['chestHeavy', 3], ['vertPull', 3], ['lateral', 3], ['hamIso', 3], ['row', 2], ['biceps', 2]] },
 };
+
+// Session length in minutes -> how many exercises.
+export const LENGTHS = { 30: 4, 45: 5, 60: 7 };
 
 // 6-week block. RIR = reps in reserve (how many more reps you could have done).
 export const BLOCK = [
   { week: 1, rir: 3, note: 'Settle in. Leave ~3 reps in the tank and nail your form.' },
   { week: 2, rir: 2, note: 'Push a bit harder. ~2 reps in the tank.' },
   { week: 3, rir: 2, note: 'Beat last week: +1 rep or +2.5 kg on anything you can.' },
-  { week: 4, rir: 1, note: 'Hard week. ~1 rep in the tank. Extra set on isolation work.' },
+  { week: 4, rir: 1, note: 'Hard week. ~1 rep in the tank. Push every set.' },
   { week: 5, rir: 1, note: 'Hardest week. Last set of each exercise can go to failure (not on squats/deadlifts).' },
   { week: 6, rir: 4, note: 'Deload. Half the sets, lighter effort. Let your body catch up and grow.' },
 ];
@@ -236,7 +240,7 @@ export const TIPS = [
   'Struggling to eat enough? Drink some of your calories: milk, shakes, smoothies.',
   'Weigh yourself in the morning after the toilet, before food. Watch the weekly average, not single days.',
   'Controlled lowering (2-3 seconds) and a full stretch at the bottom help muscle growth.',
-  'Missed a session? Just do the next one. The app keeps your rotation in order.',
+  'Not sure what to train? The suggested workout is whatever muscles have rested longest.',
   'Deload weeks are part of the plan, not a step back.',
   'Rest 2-3 minutes on big lifts. Short rest on heavy compounds costs you reps.',
   'Eating 4-5 times a day makes hitting a calorie surplus much easier.',
@@ -246,8 +250,9 @@ export const TIPS = [
 export const GUIDE = [
   { h: 'The goal', b: 'Go from ~70 kg to 80 kg by building muscle, not just adding fat. That means a lean bulk: a small calorie surplus, lots of protein, and hard, consistent training with progressive overload.' },
   { h: 'How fast', b: 'Research on lean bulking suggests gaining about 0.25-0.5% of bodyweight per week (for you roughly 0.2-0.35 kg/week). At that pace 10 kg takes around 7-12 months. Beginners can sit at the faster end.' },
-  { h: 'Training', b: 'Each muscle is hit about twice a week with around 10-20 hard sets per week. This is the range where most studies show the best growth. Compound lifts use 6-10 reps, accessories 8-12, isolation 10-15. Rest 2-3 minutes on heavy lifts.' },
-  { h: 'Why the workout changes daily', b: 'Your main lift for each session stays the same for a 6-week block so you can track strength. Every other exercise rotates from a pool of equivalent movements. That keeps it fresh, hits muscles from different angles, and stops the gym getting boring, while still covering every muscle properly.' },
+  { h: 'Training', b: 'Aim to hit each muscle about twice a week with around 10-20 hard sets per week. This is the range where most studies show the best growth. Compound lifts use 6-10 reps, accessories 8-12, isolation 10-15. Rest 2-3 minutes on heavy lifts.' },
+  { h: 'Picking your workout', b: 'You choose what to train each day. The app tracks when each muscle group was last worked and suggests whatever has rested longest, so you never hammer the same muscles two days running. Training 5-6 days a week, alternating Push, Pull and Legs (or Upper and Lower) hits everything about twice a week.' },
+  { h: 'Why the exercises change', b: 'The main lift for each workout type stays the same for a 6-week block so you can track strength. The other exercises rotate from a pool of equivalent movements. That keeps it fresh and hits muscles from different angles, while still covering every muscle properly. Tap the swap icon to change any exercise you don\'t like.' },
   { h: 'The 6-week block', b: 'Weeks 1-5 build effort (reps in reserve goes from 3 down to 1). Week 6 is a deload: fewer sets, lighter effort. Then a new block starts with new main lifts.' },
   { h: 'Progressive overload', b: 'The app shows what you did last time. When you hit the top of the rep range on every set, add weight next time (usually 2.5 kg on upper body, 5 kg on lower). Weights are optional to log, but logging makes the suggestions work.' },
   { h: 'Food', b: 'Calories: maintenance + ~300-400 kcal. Protein: ~2 g/kg. Fat: ~25% of calories. The rest from carbs, which fuel training. If the weekly average weight stalls for 2 weeks, eat ~150-200 kcal more.' },

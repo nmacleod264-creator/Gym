@@ -9,6 +9,7 @@
   --accent-ink: #11140c;
   --accent-soft: rgba(181, 242, 61, 0.14);
   --danger: #ff6b6b;
+  --warn: #f5a524;
   --radius: 18px;
   --tabbar-h: 64px;
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -28,6 +29,7 @@
     --accent-ink: #ffffff;
     --accent-soft: rgba(77, 124, 15, 0.12);
     --danger: #c62828;
+    --warn: #b45309;
     color-scheme: light;
   }
 }
@@ -332,3 +334,21 @@ details ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size
 .ai-result .row { margin-top: 12px; }
 .ci-label svg { width: 15px; height: 15px; color: var(--accent); vertical-align: -2px; margin-right: 4px; }
 .settings a { color: var(--accent); }
+
+/* workout picker */
+.mt-s { margin-top: 12px; }
+.pick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.pick {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
+  background: var(--surface); border: 2px solid transparent; border-radius: var(--radius); padding: 14px; min-height: 112px;
+}
+.pick.suggested { border-color: var(--accent); }
+.pick .badge { margin-bottom: 2px; }
+.pick b { font-size: 17px; }
+.pick-focus { font-size: 13px; color: var(--muted); }
+.pick-note { font-size: 12px; color: var(--muted); margin-top: auto; padding-top: 6px; }
+.pick-note.warn { color: var(--warn); }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; min-width: 92px; justify-content: flex-end; }
+.status i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.status.rest { color: var(--muted); }
+.status.rest i { background: transparent; border: 2px solid var(--muted); width: 9px; height: 9px; }

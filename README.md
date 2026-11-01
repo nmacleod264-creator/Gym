@@ -12,18 +12,12 @@ Everything is stored on your phone. There's no account and no server. Use **Sett
 
 ## How the program works
 
-| Training days | Split |
-|---|---|
-| 2-3 | Full body A / B / C |
-| 4 (default: Mon, Tue, Thu, Fri) | Upper / Lower × 2 |
-| 5 | Upper, Lower, Push, Pull, Legs |
-| 6 | Push / Pull / Legs × 2 |
-
-- Each session's **main lift** stays the same for a 6-week block so you can measure strength. Every other exercise rotates daily from a pool of equivalent movements.
-- **6-week block**: effort ramps from 3 reps in reserve down to 1, then week 6 is a deload.
-- **Missed a day?** The rotation doesn't skip. You get the session you missed next time.
-- Non-training days are recovery days (walk, mobility, core). You can tap "Train today instead".
-- Volume sits around 10-20 hard sets per muscle per week. Compounds use 6-10 reps, accessories 8-12, isolation 10-15.
+- **You pick what to train each day**: Push, Pull, Legs, Upper, Lower, Arms & Shoulders, Full Body, or Recovery.
+- The app tracks when each muscle group (chest, back, shoulders, arms, legs) was last worked and **suggests the most rested workout**. Anything that would hit muscles trained yesterday is flagged. A workout counts as soon as you tick a set, even if you never tap Finish.
+- Sessions fit the length you choose in Settings: 30 min (4 exercises), 45 min (5) or 60 min (7).
+- Each workout type's **main lift** stays the same for a 6-week block so you can measure strength. The other exercises rotate from pools of equivalent movements, and you can swap any of them.
+- **6-week block**: effort ramps from 3 reps in reserve down to 1, then week 6 is a deload (half the sets).
+- Reps: compounds 6-10, accessories 8-12, isolation 10-15. Training 5-6 days a week and alternating workouts hits each muscle about twice a week with 10-20 hard sets.
 - Food targets: Mifflin-St Jeor maintenance + ~350 kcal surplus, ~2 g protein per kg. The aim is to gain ~0.25-0.5 kg/week.
 
 The full reasoning is in the app (book icon, top right). Exercises, meals and tips are all plain data in `js/data.js`, so they're easy to edit.
