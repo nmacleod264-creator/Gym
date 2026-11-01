@@ -1,11 +1,11 @@
 import {
   EXERCISES, SLOTS, TYPE_DEFAULTS, GROUPS, SLOT_GROUP, DAY_TYPES, LENGTHS, BLOCK, WARMUP, RECOVERY, MEALS, TIPS, GUIDE,
 } from './data.js';
-import { getApiKey, setApiKey, resizeImage, analyzeMeal } from './food-ai.js';
+import * as store from './store.js';
+import { capabilities as mealCapabilities, preparePhoto, analyseMeal } from './meal.js';
 
 /* ---------- storage ---------- */
 
-const KEY = 'dailygym.v1';
 
 function defaultState() {
   return {
@@ -35,21 +35,14 @@ function defaultState() {
   };
 }
 
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const s = JSON.parse(raw);
-      const d = defaultState();
-      return { ...d, ...s, settings: { ...d.settings, ...s.settings } };
-    }
-  } catch (e) { /* fall through to a fresh state */ }
-  return defaultState();
+// Builds state from what the database returned (or a backup file).
+function fromSaved(data) {
+  const d = defaultState();
+  if (!data) return d;
+  return { ...d, ...data, settings: { ...d.settings, ...(data.settings || {}) }, days: data.days || {} };
 }
 
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Could not save. Storage may be full or blocked.'); }
-}
+function save() { store.scheduleSave(); }
 
 /* ---------- small utils ---------- */
 
@@ -83,13 +76,15 @@ function pick(arr, r) { return arr[Math.floor(r() * arr.length)]; }
 
 /* ---------- state ---------- */
 
-let state = load();
+let state = defaultState();
+let boot = 'loading'; // loading | ready | outside | unavailable | signed-out | error
+let mealCaps = { text: false, images: false };
 let tab = 'today';
 let modal = null;
 let timer = null;
 let curKey = todayKey();
 const openInfo = new Set();
-const freshSnap = () => ({ image: null, desc: '', busy: false, result: null, error: '' });
+const freshSnap = () => ({ photo: null, preview: null, desc: '', busy: false, result: null, error: '' });
 let snap = freshSnap();
 let audioCtx = null;
 
@@ -394,7 +389,24 @@ const TABS = [
   ['progress', 'Progress', I.chart],
 ];
 
+function renderGate() {
+  const msg = {
+    loading: ['Loading your data…', ''],
+    outside: ['Open Daily Gym in Claude', 'This app keeps your data in your Claude account, so it only works when opened on claude.ai or in the Claude app.'],
+    unavailable: ['Can\'t reach your data', 'Your saved data isn\'t available in this view. Make sure you\'re signed in to Claude, then reopen the page.'],
+    'signed-out': ['Sign in to Claude', 'Sign in to Claude to see and save your workouts, meals and progress.'],
+    error: ['Something went wrong loading your data', 'Check your connection and reopen the page.'],
+  }[boot];
+  document.getElementById('app').innerHTML = `
+    <div class="gate">
+      <span class="logo big">${I.lift}</span>
+      <h2>${msg[0]}</h2>
+      ${msg[1] ? `<p class="muted">${msg[1]}</p>` : '<span class="spinner"></span>'}
+    </div>`;
+}
+
 function render() {
+  if (boot !== 'ready') { renderGate(); return; }
   const newKey = todayKey();
   const dayChanged = newKey !== curKey;
   curKey = newKey;
@@ -777,6 +789,7 @@ function viewFood() {
       </form>
       <ul class="checklist">${(d.extra || []).map((x, i) => `
         <li class="check-item done">
+          ${x.thumb ? `<img class="thumb" src="${x.thumb}" alt="">` : ''}
           <div class="ci-body"><div class="ci-label">${x.ai ? I.spark : ''}${esc(x.name || 'Food')}</div><div class="ci-sub">${x.kcal || 0} kcal · ${x.p || 0} g protein${x.detail ? `<br>${esc(x.detail)}` : ''}</div></div>
           <button class="icon-btn subtle" data-act="del-food" data-i="${i}" aria-label="Delete">${I.x}</button>
         </li>`).join('')}</ul>
@@ -794,26 +807,27 @@ function snapTotals(r) {
 }
 
 function snapCard() {
-  if (!getApiKey()) {
+  if (!mealCaps.text) {
     return `
     <section class="card snap">
-      <div class="eyebrow">Optional</div>
-      <h3>Snap a meal, get the numbers</h3>
-      <p class="muted small">Take a photo and/or describe what you ate, and Claude estimates the calories and protein item by item. It needs your own Anthropic API key, which costs a few cents per meal.</p>
-      <button class="btn ghost block" data-act="ai-setup">${I.spark} Set it up</button>
+      <h3>Snap a meal</h3>
+      <p class="muted small">Meal analysis needs Claude, which isn't available in this view. You can still add meals with Quick add below.</p>
     </section>`;
   }
   const r = snap.result;
   return `
     <section class="card snap">
       <h3>Snap a meal</h3>
-      <label class="photo-pick ${snap.image ? 'has' : ''}">
-        ${snap.image ? `<img src="${snap.image}" alt="Your meal">` : `${I.camera}<span>Take or choose a photo</span>`}
+      <p class="muted small">Claude estimates calories and protein from a photo, a description, or both. It uses your Claude account, so there's nothing to set up.</p>
+      ${mealCaps.images ? `
+      <label class="photo-pick ${snap.preview ? 'has' : ''}">
+        ${snap.preview ? `<img src="${snap.preview}" alt="Your meal">` : `${I.camera}<span>Take or choose a photo</span>`}
         <input type="file" accept="image/*" data-input="snap-photo" hidden>
       </label>
-      ${snap.image ? `<button class="link-btn" data-act="snap-clear-photo">${I.x} Remove photo</button>` : ''}
+      ${snap.preview ? `<button class="link-btn" data-act="snap-clear-photo">${I.x} Remove photo</button>` : ''}` : ''}
       <textarea data-input="snap-desc" rows="2" placeholder="Describe it, or photograph it on your scale. Weights help a lot, e.g. 80 g oats (dry), 250 ml whole milk, 1 banana">${esc(snap.desc)}</textarea>
-      <button class="btn primary block" data-act="snap-analyze" ${snap.busy ? 'disabled' : ''}>${snap.busy ? '<span class="spinner"></span> Analysing…' : `${I.spark} ${r ? 'Analyse again' : 'Analyse'}`}</button>
+      <button class="btn primary block" data-act="snap-analyze" ${snap.busy ? 'disabled' : ''}>${snap.busy ? '<span class="spinner"></span> Claude is looking…' : `${I.spark} ${r ? 'Analyse again' : 'Analyse'}`}</button>
+      ${snap.busy ? '<p class="muted small center">This usually takes 10-40 seconds.</p>' : ''}
       ${snap.error ? `<p class="error">${esc(snap.error)}</p>` : ''}
       ${r && !snap.busy ? snapResult(r) : ''}
     </section>`;
@@ -1005,12 +1019,18 @@ function renderModal() {
       <p class="muted">${st.sets} sets · ${st.volume ? st.volume.toLocaleString() + ' kg' : 'no weights logged'}${st.dur ? ' · ' + fmtDur(st.dur) : ''}</p>
       <ul class="rows">${w.exercises.map(e => `<li class="stack"><b>${esc(EXERCISES[e.id].name)}</b><span class="muted">${e.sets.filter(s => s.done).map(s => `${s.w !== '' ? fmtKg(num(s.w)) + ' kg × ' : ''}${esc(s.r) || '✓'}`).join(', ') || 'Skipped'}</span></li>`).join('')}</ul>
       ${w.notes ? `<h3>Notes</h3><p>${esc(w.notes)}</p>` : ''}`;
+  } else if (modal.type === 'confirm') {
+    body = `<h3 class="confirm-q">${esc(modal.message)}</h3>
+      <div class="row mt-s">
+        <button class="btn ghost" data-act="confirm-no">Cancel</button>
+        <button class="btn ${modal.danger ? 'danger-solid' : 'primary'}" data-act="confirm-yes">${esc(modal.okLabel)}</button>
+      </div>`;
   } else if (modal.type === 'settings' || modal.type === 'welcome') {
     body = settingsForm(modal.type === 'welcome');
   }
   return `<div class="modal-bg" data-act="close-modal"></div>
     <div class="modal" role="dialog" aria-modal="true">
-      ${modal.type === 'welcome' ? '' : `<button class="icon-btn subtle close" data-act="close-modal" aria-label="Close">${I.x}</button>`}
+      ${modal.type === 'welcome' || modal.type === 'confirm' ? '' : `<button class="icon-btn subtle close" data-act="close-modal" aria-label="Close">${I.x}</button>`}
       ${body}
     </div>`;
 }
@@ -1049,12 +1069,6 @@ function settingsForm(welcome) {
         <ul class="habit-edit">${state.habits.map(h => `<li><span>${esc(h.label)}</span><button type="button" class="icon-btn subtle" data-act="del-habit" data-id="${h.id}" aria-label="Remove">${I.x}</button></li>`).join('')}</ul>
         <div class="add-row"><input id="new-habit" placeholder="e.g. Read 10 pages" maxlength="60"><button type="button" class="icon-btn solid" data-act="add-habit" aria-label="Add habit">${I.plus}</button></div>
       </fieldset>
-      <fieldset>
-        <legend>Meal photos (AI)</legend>
-        <p class="muted small">Claude estimates calories and protein from a photo or description. Create an API key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> and add a little credit. Each meal costs a few cents. The key is stored only on this phone and isn't included in backups.</p>
-        <input id="ai-key" name="apiKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${getApiKey() ? 'Key saved. Paste a new one to replace it' : 'Paste your key (sk-ant-…)'}">
-        ${getApiKey() ? `<button type="button" class="link-btn danger" data-act="remove-key">Remove saved key</button>` : ''}
-      </fieldset>
       <label class="switch"><input type="checkbox" name="restTimer" ${s.restTimer ? 'checked' : ''}> Rest timer after each set</label>`}
       <button class="btn primary block big" type="submit">${welcome ? "Let's go" : 'Save'}</button>
     </form>
@@ -1064,11 +1078,15 @@ function settingsForm(welcome) {
       <p class="muted small">Current block started ${fmtDate(s.startDate, { day: 'numeric', month: 'short', year: 'numeric' })}. Restarting begins week 1 today with new main lifts.</p>
       <button class="btn ghost" data-act="restart-block">Restart block today</button>
       <h3>Your data</h3>
-      <p class="muted small">Everything is stored on this phone only. Back it up now and then.</p>
+      <p class="muted small">Everything is saved to your Claude account, privately, and is there on any device where you open this page.</p>
       <div class="row">
-        <button class="btn ghost" data-act="export">Export backup</button>
-        <label class="btn ghost">Import backup<input type="file" accept="application/json" data-input="import" hidden></label>
+        <button class="btn ghost" data-act="export">Download backup</button>
+        <label class="btn ghost">Restore backup<input type="file" accept="application/json,.json" data-input="import" hidden></label>
       </div>
+      <h3>Bring over your old data</h3>
+      <p class="muted small">On the old Daily Gym app, tap <b>Copy my data</b>, then paste it here.</p>
+      <textarea id="paste-data" rows="3" placeholder="Paste your data here"></textarea>
+      <button class="btn ghost block" data-act="paste-import">Import pasted data</button>
       <button class="btn danger-btn" data-act="reset">Erase everything</button>
     </div>`}`;
 }
@@ -1076,10 +1094,6 @@ function settingsForm(welcome) {
 /* ---------- after render: chart hover etc. ---------- */
 
 function afterRender() {
-  if (modal?.focus === 'ai') {
-    modal.focus = null;
-    document.getElementById('ai-key')?.scrollIntoView({ block: 'center' });
-  }
   const svg = document.querySelector('.chart');
   if (!svg || !chartPts.length) return;
   const tip = document.getElementById('chart-tip');
@@ -1167,7 +1181,13 @@ const ACTIONS = {
     if (next !== tab) { tab = next; render(); window.scrollTo(0, 0); } else render();
   },
   modal(el) { modal = { type: el.dataset.modal, key: el.dataset.key }; render(); },
-  'close-modal'() { if (modal?.type === 'welcome') return; modal = null; render(); },
+  'close-modal'() {
+    if (modal?.type === 'welcome') return;
+    if (modal?.type === 'confirm') { answer(false); return; }
+    modal = null; render();
+  },
+  'confirm-yes'() { answer(true); },
+  'confirm-no'() { answer(false); },
   habit(el) { const d = day(curKey); d.habits[el.dataset.id] = !d.habits[el.dataset.id]; save(); render(); },
   task(el) { const t = day(curKey).tasks.find(x => x.id === el.dataset.id); if (t) t.done = !t.done; save(); render(); },
   'del-task'(el) { const d = day(curKey); d.tasks = d.tasks.filter(x => x.id !== el.dataset.id); save(); render(); },
@@ -1193,10 +1213,10 @@ const ACTIONS = {
   },
   'add-set'(el) { const e = curWorkout().exercises[+el.dataset.i]; e.sets.push({ w: '', r: '', done: false }); save(); render(); },
   'rm-set'(el) { const e = curWorkout().exercises[+el.dataset.i]; if (e.sets.length > 1) e.sets.pop(); save(); render(); },
-  'rm-ex'(el) {
+  async 'rm-ex'(el) {
     const w = curWorkout();
     const e = w.exercises[+el.dataset.i];
-    if (!confirm(`Remove ${EXERCISES[e.id].name}?`)) return;
+    if (!await ask(`Remove ${EXERCISES[e.id].name} from today's workout?`, 'Remove', true)) return;
     w.exercises.splice(+el.dataset.i, 1); openInfo.clear(); save(); render();
   },
   info(el) { const i = +el.dataset.i; openInfo.has(i) ? openInfo.delete(i) : openInfo.add(i); render(); },
@@ -1216,10 +1236,10 @@ const ACTIONS = {
     save(); render();
     toast(`Swapped to ${EXERCISES[id].name}`);
   },
-  finish() {
+  async finish() {
     const w = curWorkout();
     const done = w.exercises.reduce((a, e) => a + e.sets.filter(s => s.done).length, 0);
-    if (!done && !confirm("You haven't ticked any sets. Finish anyway?")) return;
+    if (!done && !await ask("You haven't ticked any sets. Finish anyway?", 'Finish')) return;
     if (!w.started) w.started = Date.now();
     w.finished = Date.now();
     timer = null;
@@ -1232,17 +1252,17 @@ const ACTIONS = {
     openInfo.clear(); save();
     tab = 'workout'; render(); window.scrollTo(0, 0);
   },
-  shuffle() {
+  async shuffle() {
     const d = day(curKey);
     if (!d.workout.type) { ACTIONS.switch(); return; }
-    if (touched(d.workout) && !confirm('This replaces today\'s exercises, including sets you\'ve logged. Continue?')) return;
+    if (touched(d.workout) && !await ask('This replaces today\'s exercises, including sets you\'ve logged.', 'Replace')) return;
     d.shuffle = (d.shuffle || 0) + 1;
     d.workout = buildSession(curKey, d.workout.type, `#${d.shuffle}`);
     openInfo.clear(); save(); render(); toast('New exercises picked');
   },
-  switch() {
+  async switch() {
     const d = day(curKey);
-    if (touched(d.workout) && !confirm('You have logged progress today. Pick a different workout anyway?')) return;
+    if (touched(d.workout) && !await ask('You\'ve logged progress today. Pick a different workout anyway?', 'Pick another')) return;
     d.workout = null; timer = null; openInfo.clear(); save(); render(); window.scrollTo(0, 0);
   },
   'rest-item'(el) {
@@ -1263,16 +1283,15 @@ const ACTIONS = {
     save(); render();
   },
   'del-food'(el) { day(curKey).extra.splice(+el.dataset.i, 1); save(); render(); },
-  'ai-setup'() { modal = { type: 'settings', focus: 'ai' }; render(); },
-  'remove-key'() { setApiKey(''); render(); toast('API key removed'); },
-  'snap-clear-photo'() { snap.image = null; render(); },
-  'snap-clear'() { snap = freshSnap(); render(); },
+  'snap-clear-photo'() { if (snap.preview) URL.revokeObjectURL(snap.preview); snap.photo = null; snap.preview = null; render(); },
+  'snap-clear'() { if (snap.preview) URL.revokeObjectURL(snap.preview); snap = freshSnap(); render(); },
   async 'snap-analyze'() {
     if (snap.busy) return;
-    if (!snap.image && !snap.desc.trim()) { toast('Add a photo or describe what you ate'); return; }
+    if (!snap.photo && !snap.desc.trim()) { toast('Add a photo or describe what you ate'); return; }
     snap.busy = true; snap.error = ''; render();
     try {
-      snap.result = await analyzeMeal({ apiKey: getApiKey(), image: snap.image, description: snap.desc });
+      const result = await analyseMeal({ photo: snap.photo?.blob, description: snap.desc });
+      if (result) snap.result = result;
     } catch (e) {
       snap.error = e.message;
     }
@@ -1281,7 +1300,8 @@ const ACTIONS = {
   'snap-add'() {
     const r = snap.result;
     const tot = snapTotals(r);
-    day(curKey).extra.push({ name: r.title, kcal: tot.kcal, p: tot.p, detail: r.items.map(i => `${i.name} ${i.amount}`).join(', '), ai: true });
+    day(curKey).extra.push({ name: r.title, kcal: tot.kcal, p: tot.p, detail: r.items.map(i => `${i.name} ${i.amount}`).join(', '), ai: true, thumb: snap.photo?.thumb });
+    if (snap.preview) URL.revokeObjectURL(snap.preview);
     snap = freshSnap(); save(); render();
     toast(`Added ${tot.kcal} kcal, ${tot.p} g protein`);
   },
@@ -1295,23 +1315,64 @@ const ACTIONS = {
     save(); render();
   },
   'del-habit'(el) { state.habits = state.habits.filter(h => h.id !== el.dataset.id); save(); render(); },
-  'restart-block'() {
-    if (!confirm('Start a new 6-week block from today?')) return;
+  async 'restart-block'() {
+    if (!await ask('Start a new 6-week block from today? Week 1 begins with new main lifts.', 'Restart block')) return;
     state.settings.startDate = curKey; save(); toast('New block starts today'); render();
   },
-  export() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `daily-gym-backup-${curKey}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  async export() {
+    const downloads = await window.claude?.use?.('downloads');
+    if (!downloads) { toast("Downloads aren't available here"); return; }
+    try {
+      await downloads.save({ filename: `daily-gym-backup-${curKey}.json`, data: JSON.stringify(state, null, 2) });
+    } catch (e) {
+      if (e?.code !== 'declined' && e?.code !== 'cancelled') toast("Couldn't save the backup");
+    }
   },
-  reset() {
-    if (!confirm('Erase all workouts, weights and settings? This cannot be undone.')) return;
-    state = defaultState(); save(); modal = { type: 'welcome' }; tab = 'today'; render();
+  async reset() {
+    if (!await ask('Erase all workouts, weights, meals and settings? This cannot be undone.', 'Erase everything', true)) return;
+    await store.eraseAll();
+    state = defaultState(); snap = freshSnap(); save(); modal = { type: 'welcome' }; tab = 'today'; render();
+  },
+  async 'paste-import'() {
+    const txt = document.getElementById('paste-data')?.value.trim();
+    if (!txt) { toast('Paste your data first'); return; }
+    await importData(txt);
   },
 };
+
+// In-page confirmation (the viewer blocks the browser's confirm dialog).
+let answerFn = null;
+function ask(message, okLabel = 'Continue', danger = false) {
+  return new Promise(resolve => {
+    answerFn = resolve;
+    modal = { type: 'confirm', message, okLabel, danger, prev: modal };
+    render();
+  });
+}
+function answer(ok) {
+  const prev = modal?.prev || null;
+  modal = prev; render();
+  const fn = answerFn; answerFn = null;
+  fn?.(ok);
+}
+
+async function importData(txt) {
+  let data;
+  try {
+    data = JSON.parse(txt);
+    if (!data.settings || !data.days) throw new Error('bad');
+  } catch (e) {
+    toast("That doesn't look like Daily Gym data");
+    return;
+  }
+  const n = Object.keys(data.days).length;
+  if (!await ask(`Replace everything here with this data (${n} day${n === 1 ? '' : 's'})?`, 'Replace')) return;
+  state = fromSaved(data);
+  state.settings.onboarded = true;
+  modal = null; render(); toast('Importing…');
+  await store.flush();
+  render(); toast('Your data is here');
+}
 
 const FORMS = {
   task(form) {
@@ -1345,8 +1406,6 @@ const FORMS = {
     s.weeklyGoal = n('weeklyGoal', 1, 7);
     s.sessionLength = LENGTHS[num(f.get('sessionLength'))] ? num(f.get('sessionLength')) : s.sessionLength;
     if (form.restTimer) s.restTimer = form.restTimer.checked;
-    const key = String(f.get('apiKey') || '').trim();
-    if (key) setApiKey(key);
     const firstRun = !s.onboarded;
     s.onboarded = true;
     if (firstRun) day(curKey).meals = null;
@@ -1371,8 +1430,12 @@ const CHANGES = {
   'snap-photo'(el) {
     const file = el.files[0];
     if (!file) return;
-    resizeImage(file)
-      .then(img => { snap.image = img; snap.result = null; snap.error = ''; render(); })
+    preparePhoto(file)
+      .then(photo => {
+        if (snap.preview) URL.revokeObjectURL(snap.preview);
+        snap.photo = photo; snap.preview = URL.createObjectURL(photo.blob); snap.result = null; snap.error = '';
+        render();
+      })
       .catch(e => toast(e.message));
   },
   'ai-kcal'(el) { snap.result.items[+el.dataset.i].kcal = Math.max(0, Math.round(num(el.value) || 0)); render(); },
@@ -1389,13 +1452,7 @@ const CHANGES = {
   import(el) {
     const file = el.files[0];
     if (!file) return;
-    file.text().then(txt => {
-      const data = JSON.parse(txt);
-      if (!data.settings || !data.days) throw new Error('bad file');
-      if (!confirm('Replace everything on this phone with this backup?')) return;
-      state = { ...defaultState(), ...data, settings: { ...defaultState().settings, ...data.settings } };
-      save(); modal = null; render(); toast('Backup restored');
-    }).catch(() => toast("That file doesn't look like a Daily Gym backup"));
+    file.text().then(importData).catch(() => toast("Couldn't read that file"));
   },
 };
 
@@ -1430,12 +1487,30 @@ function init() {
   window.addEventListener('focus', checkDay);
   setInterval(() => { checkDay(); tick(); }, 500);
 
+  // Save straight away when the page is hidden, so nothing is lost if it's closed.
+  document.addEventListener('visibilitychange', () => { if (document.hidden) store.flush(); });
+  window.addEventListener('pagehide', () => store.flush());
+
+  render();
+  start();
+}
+
+async function start() {
+  const status = await store.connect({
+    getState: () => state,
+    onError: e => toast(e?.code === 'quota_exceeded' ? 'Storage is full. Some changes weren\'t saved.' : 'Couldn\'t save a change. Check your connection.'),
+  });
+  if (status !== 'ok') { boot = status; render(); return; }
+  try {
+    const saved = await store.loadAll(addDays(todayKey(), -400));
+    state = fromSaved(saved && { ...(saved.meta || {}), days: saved.days });
+  } catch (e) {
+    boot = 'error'; render(); return;
+  }
+  mealCaps = await mealCapabilities();
+  boot = 'ready';
   if (!state.settings.onboarded) modal = { type: 'welcome' };
   render();
-
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  }
 }
 
 init();

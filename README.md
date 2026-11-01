@@ -1,14 +1,15 @@
 # Daily Gym
 
-A phone app (installable web app) that gives you a fresh plan every day to go from **70 kg to 80 kg**:
+A daily training and nutrition app for going from **70 kg to 80 kg**. It runs inside Claude as an artifact:
+
+**https://claude.ai/artifact/PFLo645pH12WorE9zezCrk**
 
 - **Today**: a daily checklist (workout, protein, calories, water, weigh-in, your own habits) plus a to-do list. Unfinished to-dos roll over to the next day.
-- **Workout**: a new session every day, built from a research-based lean-bulk program. You can log weight and reps (optional), see what you did last time, get "add weight" suggestions, and there's a rest timer.
-- **Food**: daily calorie and protein targets, a meal plan that changes every day, and a quick-add for anything else.
-- **Snap a meal** (optional): take a photo and/or describe what you ate, and Claude estimates calories and protein item by item. It shows its assumptions (e.g. "80 g oats taken as dry weight"), a likely range and a confidence level, asks a follow-up question when one detail would change the answer a lot, and lets you edit the numbers before adding them.
+- **Workout**: pick what to train each day. The app suggests the most rested muscle groups, builds a session to fit your time, and tracks sets, weights and best lifts.
+- **Food**: calorie and protein targets, a meal plan that changes every day, and **Snap a meal**: Claude estimates a meal's calories and protein from a photo and/or description, using your own Claude account. No API key.
 - **Progress**: bodyweight chart with an ETA to your goal, a pace check that suggests calorie changes, streaks, best lifts and workout history.
 
-Everything is stored on your phone. There's no account and no server. Use **Settings → Export backup** now and then.
+Data is saved privately to your Claude account (the artifact's database, under your own user path), so it's the same on every device where you open the page.
 
 ## How the program works
 
@@ -22,38 +23,20 @@ Everything is stored on your phone. There's no account and no server. Use **Sett
 
 The full reasoning is in the app (book icon, top right). Exercises, meals and tips are all plain data in `js/data.js`, so they're easy to edit.
 
-## Meal photos (optional)
+## Files
 
-1. Create an API key at https://console.anthropic.com/settings/keys and add some credit. Setting a monthly spend limit there is a good idea.
-2. In the app: **Settings → Meal photos (AI)** → paste the key → Save.
+| Path | What it is |
+|---|---|
+| `index.html`, `styles.css`, `js/` | The app, published to Claude as an artifact |
+| `js/data.js` | Exercises, workout types, meals, tips: plain data, easy to edit |
+| `js/store.js` | Saving and loading through the artifact database |
+| `js/meal.js` | Meal photo analysis through the artifact `sample` capability |
+| `legacy/` | The old GitHub Pages address: now a page that points to the new app and copies data from the old one |
 
-Each analysis is one request to Claude (`claude-opus-5-5`) sent straight from your phone. It costs a few cents. The key is stored only on your phone and is not included in backups. Estimates are best when you include weights, and say whether grains were weighed dry or cooked. Portions judged from a photo alone can be off by 20-30%.
+## Updating the app
 
-## Putting it on your phone
+Changes are published from a Claude Code session with the Artifact tool. It publishes `index.html` with `styles.css` and the files in `js/` to the same URL, declaring the `db`, `user`, `sample` (with images) and `downloads` capabilities.
 
-The app has to be served from an `https://` address before a phone will install it.
-
-**Option A: GitHub Pages** (the workflow in `.github/workflows/pages.yml` is already set up)
-1. GitHub Pages is free for public repos. A private repo needs GitHub Pro. So either make the repo public (it holds no personal data, since your data stays on your phone) or upgrade.
-2. Go to repo **Settings → Pages → Build and deployment → Source** and pick **GitHub Actions**.
-3. Push to the default branch (or re-run the workflow). The site URL shows up in the Actions run.
-
-**Option B: Netlify Drop** (no settings needed): drag this folder onto https://app.netlify.com/drop.
-
-Then install it:
-- **iPhone (Safari)**: open the URL → Share → **Add to Home Screen**.
-- **Android (Chrome)**: open the URL → ⋮ menu → **Install app** / **Add to Home screen**.
-
-It opens full screen like a normal app and works offline.
-
-## Running locally
-
-```sh
-npx http-server -c-1 .
-```
-
-No build step. Plain HTML, CSS and JavaScript modules.
-
-> If you edit files, bump `VERSION` in `sw.js` so installed copies pick up the change.
+To try it locally, serve the folder (`npx http-server -c-1 .`). Outside Claude, the page shows an "Open Daily Gym in Claude" screen, because it needs Claude for storage.
 
 *General fitness information, not medical advice.*
